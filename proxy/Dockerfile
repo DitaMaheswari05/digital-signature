@@ -1,11 +1,12 @@
-FROM nginx:1.27-alpine
+FROM python:3.12-slim
 
-RUN apk add --no-cache openssl \
- && rm /etc/nginx/conf.d/default.conf
+WORKDIR /app
 
-COPY nginx.conf /etc/nginx/conf.d/proxy.conf
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
 
-EXPOSE 443
+COPY . .
 
-ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
-CMD ["nginx", "-g", "daemon off;"]
+EXPOSE 8080
+
+CMD ["python", "proxy.py"]
