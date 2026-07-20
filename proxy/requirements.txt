@@ -1,0 +1,5 @@
+flask==3.0.3
+requests==2.32.3
+cryptography==43.0.1
+http-message-signatures      # RFC 9421 — HTTPMessageSigner, key resolver
+requests-http-signature      # RFC 9421 — auth plugin untuk requests library

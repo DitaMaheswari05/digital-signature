@@ -1,12 +1,9 @@
 services:
   proxy:
     build: ./proxy
-    ports: ["443:443"]
+    ports: ["8080:8080"]
     volumes:
-      - ./key_cert:/etc/pki/key_cert:ro
-      - ./scripts/entrypoint.sh:/usr/local/bin/entrypoint.sh:ro
-    tmpfs:
-      - /etc/pki/runtime
+      - ./key_cert:/key_cert:ro
     networks:
       - mtls-net
     depends_on:
@@ -16,9 +13,9 @@ services:
     build: ./waf
     volumes:
       - ./key_cert:/etc/pki/key_cert:ro
-      - ./scripts/entrypoint.sh:/usr/local/bin/entrypoint.sh:ro
+      - ./scripts/entrypoint.sh:/docker-entrypoint.d/99-prepare-certs.sh:ro
     tmpfs:
-      - /etc/pki/runtime
+      - /etc/pki/runtime:mode=01777
     networks:
       - mtls-net
     depends_on:
@@ -27,6 +24,8 @@ services:
 
   waf_service:
     build: ./waf/waf_service
+    volumes:
+      - ./key_cert:/key_cert:ro   # CA bundle untuk trust anchor verification (Layer 2)
     networks:
       - mtls-net
 
@@ -39,13 +38,13 @@ services:
 
   client:
     build: ./client
-    volumes:
-      - ./key_cert:/etc/pki/key_cert:ro
     networks:
       - mtls-net
     depends_on:
       - proxy
+    stdin_open: true
+    tty: true
 
 networks:
   mtls-net:
-    driver: bridge
+    driver: bridge
