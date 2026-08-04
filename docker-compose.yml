@@ -11,8 +11,9 @@ services:
 
   waf:
     build: ./waf
+    user: "0"
     volumes:
-      - ./key_cert:/etc/pki/key_cert:ro
+      - ./key_cert:/etc/pki/key_cert
       - ./scripts/entrypoint.sh:/docker-entrypoint.d/99-prepare-certs.sh:ro
     tmpfs:
       - /etc/pki/runtime:mode=01777
@@ -25,7 +26,7 @@ services:
   waf_service:
     build: ./waf/waf_service
     volumes:
-      - ./key_cert:/key_cert:ro   # CA bundle untuk trust anchor verification (Layer 2)
+      - ./key_cert:/key_cert:ro
     networks:
       - mtls-net
 
