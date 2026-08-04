@@ -2,7 +2,8 @@ import json
 import urllib.request
 import urllib.error
 
-PROXY_URL = "http://localhost:8080"
+import os
+PROXY_URL = os.environ.get("PROXY_URL", "http://proxy:8080")
 
 def get_user_input() -> tuple[str, str, dict]:
     print("\n--- mTLS Proxy Client ---")
