@@ -12,7 +12,7 @@ from crypto_utils import (
     load_trusted_ca_bundle,
     verify_cert_trusted,
 )
-from http_sig_verifier import verify_http_signature
+from cms_verifier import verify_cms_signature
 
 app = FastAPI()
 
@@ -30,7 +30,6 @@ _LOCAL_KEYCERT  = Path(__file__).resolve().parent.parent.parent.parent / "key_ce
 KEYCERT_DIR = _DOCKER_KEYCERT if _DOCKER_KEYCERT.is_dir() else _LOCAL_KEYCERT
 _CA_BUNDLE_FILE = KEYCERT_DIR / "clientca_rootca_.pem"
 
-
 @lru_cache(maxsize=1)
 def _get_trusted_cas():
     if not _CA_BUNDLE_FILE.exists():
@@ -43,7 +42,6 @@ def _get_trusted_cas():
         raise RuntimeError(f"CA bundle kosong atau tidak valid: {_CA_BUNDLE_FILE}")
     return cas
 
-
 @app.on_event("startup")
 async def startup_event():
     try:
@@ -51,7 +49,6 @@ async def startup_event():
         log.info("CA bundle loaded: %d CA cert(s) dari %s", len(cas), _CA_BUNDLE_FILE)
     except Exception as e:
         log.warning("Gagal load CA bundle saat startup: %s", e)
-
 
 @app.post("/verify")
 async def verify_request(
@@ -136,16 +133,12 @@ async def verify_request(
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Gagal membaca request body: {e}")
 
-    log.info("[Step 3 | Layer 3] Verifikasi HTTP Message Signature (RFC 9421) ...")
-    sig_header   = request.headers.get("signature", "")
-    input_header = request.headers.get("signature-input", "")
-    digest_header = request.headers.get("content-digest", "")
-    log.debug("[Step 3 | Layer 3]   Signature       : %s...", sig_header[:60] if sig_header else "(none)")
-    log.debug("[Step 3 | Layer 3]   Signature-Input : %s", input_header[:80] if input_header else "(none)")
-    log.debug("[Step 3 | Layer 3]   Content-Digest  : %s", digest_header[:60] if digest_header else "(none)")
+    log.info("[Step 3 | Layer 3] Verifikasi CMS Signature...")
+    cms_header = request.headers.get("x-cms-payload", "")
+    log.debug("[Step 3 | Layer 3]   X-CMS-Payload : %s...", cms_header[:60] if cms_header else "(none)")
 
-    await verify_http_signature(request, client_cert, body_bytes)
-    log.info("[Step 3 | Layer 3]  HTTP Message Signature valid — integritas body terjamin")
+    await verify_cms_signature(request, client_cert, body_bytes)
+    log.info("[Step 3 | Layer 3]  CMS Signature valid — signed_attributes (content-type, message-digest, signing-time) terverifikasi")
 
     subject_str = x_ssl_client_s_dn or str(client_cert.subject)
     log.info("[Step 3]  SEMUA LAYER PASSED — request diotorisasi untuk diteruskan ke WebApp")
@@ -155,6 +148,6 @@ async def verify_request(
     return {
         "status": "ok",
         "cert_source": cert_source,
-        "layers_passed": ["transport", "trust_anchor", "http_message_signature"],
+        "layers_passed": ["transport", "trust_anchor", "cms_signature"],
         "client_subject": subject_str,
     }
