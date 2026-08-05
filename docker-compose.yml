@@ -4,6 +4,7 @@ services:
     ports: ["8080:8080"]
     volumes:
       - ./key_cert:/key_cert:ro
+      - ./shared:/shared:ro
     networks:
       - mtls-net
     depends_on:
@@ -27,6 +28,7 @@ services:
     build: ./waf/waf_service
     volumes:
       - ./key_cert:/key_cert:ro
+      - ./shared:/shared:ro
     networks:
       - mtls-net
 
@@ -34,6 +36,7 @@ services:
     build: ./webapp
     volumes:
       - ./key_cert:/etc/pki/key_cert:ro
+      - ./shared:/shared:ro
     networks:
       - mtls-net
 
