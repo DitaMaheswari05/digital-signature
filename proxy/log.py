@@ -186,3 +186,20 @@ def log_response_headers(headers: dict):
 def log_done(status_code: int):
     _logger.info("RESPONSE SELESAI  status=%d", status_code)
     _logger.info(_SEP)
+
+# ── Header verification log (Step 5b) ──────────────────────────────────── #
+
+def log_response_header_verified(reason: str):
+    _logger.info(
+        "[Step 5b] Header response verified OK via cms_lib.header_verifier — %s", reason
+    )
+
+def log_response_header_verify_failed(reason: str):
+    _logger.warning(
+        "[Step 5b] Header response digest TIDAK COCOK (non-blocking) — %s", reason
+    )
+
+def log_response_header_no_digest():
+    _logger.debug(
+        "[Step 5b] Response tidak mengandung CMS header payload untuk verifikasi — skip."
+    )
