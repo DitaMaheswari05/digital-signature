@@ -91,15 +91,7 @@ class _CMSPackageSeq(asn1_core.Sequence):
         ("encrypted_content_info", _EncryptedContentInfoSeq),
     ]
 
-def canonical_headers(headers: dict) -> bytes:
-    normalised = [
-        (k.lower().strip(), v.strip() if isinstance(v, str) else str(v).strip())
-        for k, v in headers.items()
-        if k
-    ]
-    normalised.sort(key=lambda kv: kv[0])
-    canonical = "".join(f"{k}: {v}\n" for k, v in normalised)
-    return canonical.encode("utf-8")
+from cms_lib.canonical import canonical_headers, IGNORED_HEADERS
 
 
 def _build_signed_attributes(
