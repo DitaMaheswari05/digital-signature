@@ -6,20 +6,77 @@ import tempfile
 import time
 import uuid
 from pathlib import Path
+
+# Inject shared/ ke sys.path SEBELUM import cms_lib
+# Di Docker: /shared di-mount via volume; secara lokal: ../shared relatif dari file ini
+for _shared_candidate in (
+    Path("/shared"),
+    Path(__file__).resolve().parent.parent / "shared",
+):
+    if _shared_candidate.is_dir() and str(_shared_candidate) not in sys.path:
+        sys.path.insert(0, str(_shared_candidate))
+        break
+
 from flask import Flask, request, Response
 import requests as http_requests
 from requests.adapters import HTTPAdapter
 from cryptography import x509
-sys.path.append(str(Path(__file__).parent / "crypto"))
-_SHARED_LIB = Path(__file__).resolve().parent.parent / "shared"
-if str(_SHARED_LIB) not in sys.path:
-    sys.path.insert(0, str(_SHARED_LIB))
 from crypto import load_cert_from_pem, load_private_key_from_pem
 from crypto.cms_core import cms_pack, cms_unpack
 from cms_lib.header_verifier import verify_cms_headers, IGNORED_HEADERS
 from urllib3.util.retry import Retry
 import log as plog
+from flask_cors import CORS
+try:
+    from audit_logger import log_event as _audit_log_event
+except Exception:
+    def _audit_log_event(*args, **kwargs):
+        pass
+
+
 app = Flask(__name__)
+CORS(app)
+
+try:
+    from metrics import setup_proxy_metrics, record_proxy_cms_result
+    _PROXY_METRICS_AVAILABLE = True
+    setup_proxy_metrics(app)
+except ImportError:
+    _PROXY_METRICS_AVAILABLE = False
+
+    def record_proxy_cms_result(success, duration_seconds):
+        pass
+except Exception as e:
+    _PROXY_METRICS_AVAILABLE = False
+
+    def record_proxy_cms_result(success, duration_seconds):
+        pass
+    import traceback
+    traceback.print_exc()
+_WAF_SESSION: http_requests.Session | None = None
+
+
+def _get_waf_session() -> http_requests.Session:
+    global _WAF_SESSION
+    if _WAF_SESSION is None:
+        session = http_requests.Session()
+        retry_strategy = Retry(
+            total=1,
+            status_forcelist=[429, 502, 503, 504],
+            allowed_methods=["POST", "PUT", "PATCH", "GET", "DELETE"],
+            backoff_factor=0.5,
+        )
+        adapter = HTTPAdapter(
+            max_retries=retry_strategy,
+            pool_connections=100,
+            pool_maxsize=200,
+        )
+        session.mount("https://", adapter)
+        session.mount("http://", adapter)
+        _WAF_SESSION = session
+    return _WAF_SESSION
+
+
 _DOCKER_KEYCERT = Path("/key_cert")
 _LOCAL_KEYCERT  = Path(__file__).resolve().parent.parent / "key_cert"
 KEYCERT_DIR = _DOCKER_KEYCERT if _DOCKER_KEYCERT.is_dir() else _LOCAL_KEYCERT
@@ -30,9 +87,12 @@ WEBAPP_CERT_PATH = KEYCERT_DIR / "webappcert.crt"
 SERVER_CA_CERT   = KEYCERT_DIR / "serverca_rootca_.pem"
 ROOT_CA_CERT     = KEYCERT_DIR / "rootca.pem"
 WAF_BASE_URL = "https://waf:8443"
+
+
 def _build_server_ca_bundle() -> str:
     server_ca_raw = SERVER_CA_CERT.read_bytes()
     root_ca_raw   = ROOT_CA_CERT.read_bytes()
+
     def _extract_certs(raw: bytes) -> list[bytes]:
         blocks  = []
         current = []
@@ -56,6 +116,8 @@ def _build_server_ca_bundle() -> str:
     ca_tmp.flush()
     ca_tmp.close()
     return ca_tmp.name
+
+
 try:
     _CLIENT_CERT_FILE = str(CLIENT_CERT_PATH)
     _CLIENT_KEY_FILE  = str(CLIENT_KEY)
@@ -66,20 +128,22 @@ try:
     with open(WEBAPP_CERT_PATH, "rb") as _f:
         _WEBAPP_CERT_OBJ = x509.load_pem_x509_certificate(_f.read())
     _WEBAPP_PUBKEY = _WEBAPP_CERT_OBJ.public_key()
+    _CLIENT_KEY_OBJ = load_private_key_from_pem(_CLIENT_KEY_FILE)
 except Exception as _init_err:
     plog.log_mtls_init_failed(_init_err)
     _CLIENT_CERT_FILE = _CLIENT_KEY_FILE = _SERVER_CA_BUNDLE = None
-    _CLIENT_CERT_OBJ = _WEBAPP_CERT_OBJ = _WEBAPP_PUBKEY = None
+    _CLIENT_CERT_OBJ = _WEBAPP_CERT_OBJ = _WEBAPP_PUBKEY = _CLIENT_KEY_OBJ = None
+
+
 def build_request_body(api_body: dict, req_headers: dict | None = None) -> tuple[dict, str]:
     plog.log_build_start()
     payload_str   = json.dumps(api_body, separators=(",", ":"), ensure_ascii=False)
     payload_bytes = payload_str.encode("utf-8")
     plog.log_payload_serialized(len(payload_str))
     plog.log_encrypt_start()
-    client_key = load_private_key_from_pem(str(CLIENT_KEY))
     cms_der    = cms_pack(
         body=payload_bytes,
-        signer_key=client_key,
+        signer_key=_CLIENT_KEY_OBJ,
         signer_cert=_CLIENT_CERT_OBJ,
         recipient_pubkey=_WEBAPP_PUBKEY,
         content_type="application/json",
@@ -90,6 +154,7 @@ def build_request_body(api_body: dict, req_headers: dict | None = None) -> tuple
     plog.log_encrypted_value("cms_payload (request)", cms_b64[:80] + "...")
     plog.log_build_done()
     return {"cms_payload": cms_b64}, cms_b64
+
 def process_response(waf_resp: http_requests.Response) -> bytes:
     plog.log_response_processing()
     body_bytes = waf_resp.content
@@ -109,8 +174,12 @@ def process_response(waf_resp: http_requests.Response) -> bytes:
         cms_der = base64.b64decode(cms_b64)
     except Exception as e:
         raise ValueError(f"[Step 5] Gagal decode base64 CMS response: {e}")
-    client_key = load_private_key_from_pem(str(CLIENT_KEY))
-    plaintext, sig_valid = cms_unpack(cms_der, client_key)
+    _cms_start = time.perf_counter()
+    plaintext, sig_valid = cms_unpack(cms_der, _CLIENT_KEY_OBJ, trusted_cert=_WEBAPP_CERT_OBJ)
+    record_proxy_cms_result(
+        success=sig_valid,
+        duration_seconds=time.perf_counter() - _cms_start,
+    )
     if not sig_valid:
         plog.log_response_signature_invalid()
         raise ValueError(
@@ -134,9 +203,15 @@ def process_response(waf_resp: http_requests.Response) -> bytes:
             plog.log_response_header_verified(hdr_reason)
         else:
             plog.log_response_header_verify_failed(hdr_reason)
+            raise ValueError(
+                f"[Step 5] Header response digest TIDAK COCOK — "
+                f"response mungkin dimanipulasi setelah dikirim WebApp. "
+                f"Alasan: {hdr_reason}"
+            )
     else:
         plog.log_response_header_no_digest()
     return plaintext
+
 def _make_headers(
     request_id:   str,
     cms_verified: bool | None = None,
@@ -154,9 +229,36 @@ def _make_headers(
     elif cms_verified is False:
         h["X-CMS-Verified"] = "false"
     return h
+
+
+@app.route("/healthz", methods=["GET"])
+def health_check():
+    return Response("OK", status=200, content_type="text/plain")
+
+@app.route("/api/metrics", methods=["GET"])
+def get_metrics():
+    query = request.args.get("query")
+    if not query:
+        return Response("Missing query", status=400)
+    try:
+        resp = http_requests.get(f"http://prometheus:9090/api/v1/query?query={query}", timeout=5)
+        return Response(resp.content, status=resp.status_code, content_type=resp.headers.get("Content-Type"))
+    except Exception as e:
+        return Response(json.dumps({"error": str(e)}), status=500, content_type="application/json")
+
+@app.route("/api/logs", methods=["GET"])
+def get_logs():
+    try:
+        resp = http_requests.get(f"http://loki:3100/loki/api/v1/query_range?{request.query_string.decode()}", timeout=5)
+        return Response(resp.content, status=resp.status_code, content_type=resp.headers.get("Content-Type"))
+    except Exception as e:
+        return Response(json.dumps({"error": str(e)}), status=500, content_type="application/json")
+
+
 @app.route("/", defaults={"path": ""}, methods=["GET", "POST", "PUT", "DELETE", "PATCH"])
 @app.route("/<path:path>",             methods=["GET", "POST", "PUT", "DELETE", "PATCH"])
 def proxy_handler(path: str):
+    _handler_start = time.perf_counter()
     request_id = str(uuid.uuid4())
     plog.log_request_received(request.method, path)
     plog.log_request_id(request_id)
@@ -207,29 +309,27 @@ def proxy_handler(path: str):
     if query:
         target_url = f"{target_url}?{query}"
     try:
-        session = http_requests.Session()
-        retry_strategy = Retry(
-            total=3,
-            status_forcelist=[429, 500, 502, 503, 504],
-            allowed_methods=["POST", "PUT", "PATCH", "GET", "DELETE"],
-            backoff_factor=1
-        )
-        adapter = HTTPAdapter(
-            max_retries=retry_strategy,
-            pool_connections=10,
-            pool_maxsize=10,
-        )
-        session.mount("https://", adapter)
-        session.mount("http://", adapter)
+        session = _get_waf_session()
+        demo_scenario = request.headers.get("X-Demo-Scenario", "normal")
+        if demo_scenario == "tamper" and "X-CMS-Payload" in outbound_headers:
+            payload = outbound_headers["X-CMS-Payload"]
+            corrupted = payload[:10] + "TAMPERED" + payload[18:]
+            outbound_headers["X-CMS-Payload"] = corrupted
+            waf_kwargs["headers"] = outbound_headers
+            plog.logger.warning("[DEMO] Payload tampered before sending to WAF.")
         req = http_requests.Request(
             method=request.method,
             url=target_url,
             **waf_kwargs,
         )
         prepared = session.prepare_request(req)
+        cert_to_use = (_CLIENT_CERT_FILE, _CLIENT_KEY_FILE)
+        if demo_scenario == "bad_cert":
+            cert_to_use = None
+            plog.logger.warning("[DEMO] Omitting Client Certificate for bad_cert scenario.")
         waf_resp = session.send(
             prepared,
-            cert=(_CLIENT_CERT_FILE, _CLIENT_KEY_FILE),
+            cert=cert_to_use,
             verify=_SERVER_CA_BUNDLE,
             timeout=(10.0, 60.0),
         )
@@ -258,6 +358,15 @@ def proxy_handler(path: str):
         plaintext = process_response(waf_resp)
     except ValueError as e:
         plog.log_response_validation_failed(e)
+        _audit_log_event(
+            request_id=request_id,
+            step=1,
+            service="proxy",
+            client_subject="",
+            result="rejected",
+            reason=f"CMS response validation gagal: {e}",
+            latency_ms=int((time.perf_counter() - _handler_start) * 1000),
+        )
         return Response(
             json.dumps({"error": str(e)}),
             status=400,
@@ -282,6 +391,15 @@ def proxy_handler(path: str):
         plaintext_str = str(plaintext) if plaintext else ""
     resp_headers = _make_headers(request_id, cms_verified=True)
     plog.log_response_headers(resp_headers)
+    _audit_log_event(
+        request_id=request_id,
+        step=1,
+        service="proxy",
+        client_subject="",
+        result="success",
+        reason="CMS response terverifikasi dan didekripsi",
+        latency_ms=int((time.perf_counter() - _handler_start) * 1000),
+    )
     try:
         parsed = json.loads(plaintext_str)
         plog.log_done(waf_resp.status_code)
@@ -298,6 +416,8 @@ def proxy_handler(path: str):
             content_type="text/plain",
             headers=resp_headers,
         )
+
+
 def _wait_for_waf(max_retries: int = 30, retry_delay: float = 2.0) -> bool:
     for attempt in range(max_retries):
         try:
@@ -316,6 +436,8 @@ def _wait_for_waf(max_retries: int = 30, retry_delay: float = 2.0) -> bool:
             time.sleep(retry_delay)
     print("[WAF] Timeout waiting for WAF health, starting proxy anyway...")
     return False
+
+
 if __name__ == "__main__":
     _wait_for_waf()
-    app.run(host="0.0.0.0", port=8080, debug=False)
+    app.run(host="0.0.0.0", port=8080, debug=False, threaded=True)

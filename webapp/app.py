@@ -1,23 +1,33 @@
 import base64
+import os
 import json
 import logging
 import sys
+import time
 from pathlib import Path
 from fastapi import FastAPI, Request, Response
 from cryptography import x509
 from cryptography.hazmat.primitives import serialization
+from cms_core import cms_decrypt_request, cms_pack_response
+from web_sdk import load_private_key, load_public_key
+
 _SHARED_LIB = Path(__file__).resolve().parent.parent / "shared"
 if str(_SHARED_LIB) not in sys.path:
     sys.path.insert(0, str(_SHARED_LIB))
-from cms_core import cms_decrypt_request, cms_pack_response
-from web_sdk import load_private_key, load_public_key
-import os
+try:
+    from audit_logger import log_event as _audit_log_event
+except Exception:
+    def _audit_log_event(*args, **kwargs):
+        pass
+
+
 app = FastAPI()
 logging.basicConfig(
     level=logging.DEBUG,
     format="[%(asctime)s] [webapp] [%(levelname)s] %(message)s",
     datefmt="%Y-%m-%d %H:%M:%S",
 )
+
 log = logging.getLogger("webapp")
 _SEP = "-" * 55
 _DOCKER_KEYCERT = Path("/etc/pki/key_cert")
@@ -37,8 +47,11 @@ try:
 except FileNotFoundError as e:
     log.error("Gagal memuat sertifikat: %s", e)
     WEBAPP_PRIV_KEY = WEBAPP_CERT = CLIENT_CERT = CLIENT_PUB_KEY = None
+
+
 @app.api_route("/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH"])
 async def handle_all(path: str, request: Request):
+    _start = time.perf_counter()
     try:
         log.info(_SEP)
         log.info("[Step 4] Request masuk dari WAF | %s /%s", request.method, path)
@@ -72,11 +85,29 @@ async def handle_all(path: str, request: Request):
                     )
                     if not sig_valid:
                         log.warning("[Step 4] CMS signature TIDAK VALID — request mungkin dimanipulasi")
+                        _audit_log_event(
+                            request_id=request_id,
+                            step=4,
+                            service="webapp",
+                            client_subject="",
+                            result="rejected",
+                            reason="CMS signature invalid atau cert tidak cocok",
+                            latency_ms=int((time.perf_counter() - _start) * 1000),
+                        )
                         return Response(
                             status_code=403,
                             content="CMS signature verification failed"
                         )
                     log.info("[Step 4] CMS decrypt + verify BERHASIL (signature valid)")
+                    _audit_log_event(
+                        request_id=request_id,
+                        step=4,
+                        service="webapp",
+                        client_subject="",
+                        result="success",
+                        reason="CMS decrypt+verify berhasil, response dikemas ulang",
+                        latency_ms=int((time.perf_counter() - _start) * 1000),
+                    )
                     log.debug("[CMS] signed_attributes: content-type, headers-digest, message-digest, signing-time")
                     request_payload = json.loads(decrypted_bytes)
                     log.info("[Step 4] Payload: %s", request_payload)
