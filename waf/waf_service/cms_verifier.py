@@ -1,6 +1,7 @@
 import base64
 import hashlib
 import sys
+import time
 from pathlib import Path
 from typing import Union
 from asn1crypto import core as asn1_core
@@ -10,10 +11,38 @@ from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import padding as asym_padding
 from cryptography.x509 import Certificate
 from fastapi import HTTPException, Request
+try:
+    from metrics import (
+        CMSVerifyTimer,
+        record_cms_result,
+        record_header_result,
+        record_replay_attack,
+        record_cert_mismatch,
+        CMS_VERIFICATION_DURATION,
+    )
+    _METRICS_AVAILABLE = True
+except ImportError:
+    _METRICS_AVAILABLE = False
+
+    class CMSVerifyTimer:
+        def __init__(self, scope): pass
+        def __enter__(self): return self
+        def __exit__(self, *_): pass
+
+    def record_cms_result(r): pass
+    def record_header_result(r): pass
+    def record_replay_attack(): pass
+    def record_cert_mismatch(): pass
+
+    class _FakeDuration:
+        def observe(self, v): pass
+    CMS_VERIFICATION_DURATION = _FakeDuration()
 _SHARED_LIB = Path(__file__).resolve().parent.parent.parent / "shared"
 if str(_SHARED_LIB) not in sys.path:
     sys.path.insert(0, str(_SHARED_LIB))
 from cms_lib.header_verifier import verify_cms_headers
+
+
 class _SignerInfoSeq(asn1_core.Sequence):
     _fields = [
         ("signer_certificate",  asn1_core.OctetString),
@@ -22,17 +51,23 @@ class _SignerInfoSeq(asn1_core.Sequence):
         ("signed_attributes",   asn1_core.OctetString),
         ("signature",           asn1_core.OctetString),
     ]
+
+
 class _RecipientInfoSeq(asn1_core.Sequence):
     _fields = [
         ("key_encryption_algorithm", asn1_core.UTF8String),
         ("encrypted_key",            asn1_core.OctetString),
     ]
+
+
 class _EncryptedContentInfoSeq(asn1_core.Sequence):
     _fields = [
         ("content_encryption_algorithm", asn1_core.UTF8String),
         ("iv",                           asn1_core.OctetString),
         ("encrypted_content",            asn1_core.OctetString),
     ]
+
+
 class _CMSPackageSeq(asn1_core.Sequence):
     _fields = [
         ("version",                asn1_core.Integer),
@@ -40,11 +75,15 @@ class _CMSPackageSeq(asn1_core.Sequence):
         ("recipient_info",         _RecipientInfoSeq),
         ("encrypted_content_info", _EncryptedContentInfoSeq),
     ]
+
+
 def _pss_padding() -> asym_padding.PSS:
     return asym_padding.PSS(
         mgf=asym_padding.MGF1(hashes.SHA256()),
         salt_length=asym_padding.PSS.DIGEST_LENGTH,
     )
+
+
 def _problem(status: int, title: str, detail: str) -> dict:
     return {
         "type":   "urn:ietf:rfc:5652",
@@ -52,11 +91,18 @@ def _problem(status: int, title: str, detail: str) -> dict:
         "status": status,
         "detail": detail,
     }
+
+
 async def verify_cms_signature(
     request:     Request,
     client_cert: Certificate,
     body_bytes:  bytes,
 ) -> None:
+    _cms_start = time.perf_counter()
+
+    def _record(result: str) -> None:
+        CMS_VERIFICATION_DURATION.observe(time.perf_counter() - _cms_start)
+        record_cms_result(result)
     original_method = request.headers.get("x-original-method", request.method).upper()
     _NO_BODY_METHODS = {"GET", "HEAD", "DELETE"}
     if original_method in _NO_BODY_METHODS:
@@ -64,6 +110,7 @@ async def verify_cms_signature(
     cms_b64 = request.headers.get("x-cms-payload")
     if not cms_b64:
         print(f"DEBUG: Missing X-CMS-Payload header for method {original_method}", flush=True)
+        _record("failed")
         raise HTTPException(
             status_code=401,
             detail=_problem(
@@ -76,6 +123,7 @@ async def verify_cms_signature(
     try:
         cms_der = base64.b64decode(cms_b64)
     except Exception as exc:
+        _record("failed")
         raise HTTPException(
             status_code=401,
             detail=_problem(401, "Invalid CMS Encoding", f"[Layer 3] X-CMS-Payload bukan base64 valid: {exc}"),
@@ -86,6 +134,7 @@ async def verify_cms_signature(
         signed_attrs_der = bytes(pkg["signer_info"]["signed_attributes"].native)
         signature        = bytes(pkg["signer_info"]["signature"].native)
     except Exception as exc:
+        _record("failed")
         raise HTTPException(
             status_code=401,
             detail=_problem(401, "CMS Parse Error", f"[Layer 3] Gagal parse CMS package: {exc}"),
@@ -93,6 +142,8 @@ async def verify_cms_signature(
     trusted_der = client_cert.public_bytes(serialization.Encoding.DER)
     if signer_cert_der != trusted_der:
         print("DEBUG: CMS signer cert does not match mTLS client cert", flush=True)
+        record_cert_mismatch()
+        _record("cert_mismatch")
         raise HTTPException(
             status_code=403,
             detail=_problem(
@@ -105,11 +156,13 @@ async def verify_cms_signature(
     try:
         signer_cert    = x509.load_der_x509_certificate(signer_cert_der)
         signing_digest = hashlib.sha256(signed_attrs_der).digest()
-        signer_cert.public_key().verify(
-            signature, signing_digest, _pss_padding(), hashes.SHA256()
-        )
+        with CMSVerifyTimer("signature"):
+            signer_cert.public_key().verify(
+                signature, signing_digest, _pss_padding(), hashes.SHA256()
+            )
     except InvalidSignature:
         print("DEBUG: CMS signature verification FAILED (InvalidSignature)", flush=True)
+        _record("failed")
         raise HTTPException(
             status_code=403,
             detail=_problem(
@@ -122,17 +175,21 @@ async def verify_cms_signature(
     except Exception as exc:
         import traceback
         print(f"DEBUG: CMS verify error: {exc}\n{traceback.format_exc()}", flush=True)
+        _record("failed")
         raise HTTPException(
             status_code=403,
             detail=_problem(403, "CMS Verification Error", f"[Layer 3] Error saat verifikasi CMS: {exc}"),
         )
-    hdr_ok, hdr_reason = verify_cms_headers(
-        dict(request.headers),
-        cms_b64,
-        context="request",
-    )
+    with CMSVerifyTimer("canonicalization"):
+        hdr_ok, hdr_reason = verify_cms_headers(
+            dict(request.headers),
+            cms_b64,
+            context="request",
+        )
     if not hdr_ok:
         print(f"DEBUG: Header digest verification FAILED — {hdr_reason}", flush=True)
+        record_header_result("modified")
+        _record("header_modified")
         raise HTTPException(
             status_code=403,
             detail=_problem(
@@ -141,4 +198,6 @@ async def verify_cms_signature(
                 f"[Layer 3b] Header request tidak cocok dengan yang di-sign: {hdr_reason}",
             ),
         )
+    record_header_result("passed")
+    _record("success")
     print(f"DEBUG: Header digest verification OK — {hdr_reason}", flush=True)

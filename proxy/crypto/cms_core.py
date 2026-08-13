@@ -2,7 +2,9 @@ import base64
 import hashlib
 import logging
 import os
+import sys
 import time
+from pathlib import Path
 from datetime import datetime, timezone
 from typing import Union
 from asn1crypto import core as asn1_core
@@ -13,12 +15,25 @@ from cryptography.hazmat.primitives.asymmetric import padding as asym_padding
 from cryptography.hazmat.primitives.asymmetric.rsa import RSAPrivateKey, RSAPublicKey
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.x509 import Certificate
+
+# Inject shared/ ke sys.path agar cms_lib bisa di-import
+# Di Docker: /shared di-mount via volume; secara lokal: ../../../shared relatif dari file ini
+for _shared_candidate in (
+    Path("/shared"),
+    Path(__file__).resolve().parent.parent.parent / "shared",
+):
+    if _shared_candidate.is_dir() and str(_shared_candidate) not in sys.path:
+        sys.path.insert(0, str(_shared_candidate))
+        break
+
 _cms_log = logging.getLogger("proxy")
 CMS_VERSION: int = 1
 _DIGEST_ALG      = "sha256"
 _SIG_ALG         = "rsa_pss_sha256"
 _KEY_ENC_ALG     = "rsa_oaep_sha256"
 _CONTENT_ENC_ALG = "aes256_gcm"
+
+
 def _der_length(n: int) -> bytes:
     if n < 0x80:
         return bytes([n])
@@ -30,16 +45,28 @@ def _der_length(n: int) -> bytes:
         return bytes([0x83, (n >> 16) & 0xFF, (n >> 8) & 0xFF, n & 0xFF])
     else:
         raise ValueError(f"DER value too large to encode: {n} bytes")
+
+
 def _der_tlv(tag: int, value: bytes) -> bytes:
     return bytes([tag]) + _der_length(len(value)) + value
+
+
 def _der_seq(*fields: bytes) -> bytes:
     return _der_tlv(0x30, b"".join(fields))
+
+
 def _der_set(*fields: bytes) -> bytes:
     return _der_tlv(0x31, b"".join(fields))
+
+
 def _der_octet(data: bytes) -> bytes:
     return _der_tlv(0x04, data)
+
+
 def _der_utf8(s: str) -> bytes:
     return _der_tlv(0x0C, s.encode("utf-8"))
+
+
 def _der_int(n: int) -> bytes:
     if n == 0:
         return _der_tlv(0x02, b"\x00")
@@ -50,6 +77,8 @@ def _der_int(n: int) -> bytes:
     if octets[0] & 0x80:
         octets.insert(0, 0x00)
     return _der_tlv(0x02, bytes(octets))
+
+
 class _SignerInfoSeq(asn1_core.Sequence):
     _fields = [
         ("signer_certificate",  asn1_core.OctetString),
@@ -58,17 +87,23 @@ class _SignerInfoSeq(asn1_core.Sequence):
         ("signed_attributes",   asn1_core.OctetString),
         ("signature",           asn1_core.OctetString),
     ]
+
+
 class _RecipientInfoSeq(asn1_core.Sequence):
     _fields = [
         ("key_encryption_algorithm", asn1_core.UTF8String),
         ("encrypted_key",            asn1_core.OctetString),
     ]
+
+
 class _EncryptedContentInfoSeq(asn1_core.Sequence):
     _fields = [
         ("content_encryption_algorithm", asn1_core.UTF8String),
         ("iv",                           asn1_core.OctetString),
         ("encrypted_content",            asn1_core.OctetString),
     ]
+
+
 class _CMSPackageSeq(asn1_core.Sequence):
     _fields = [
         ("version",                asn1_core.Integer),
@@ -76,7 +111,11 @@ class _CMSPackageSeq(asn1_core.Sequence):
         ("recipient_info",         _RecipientInfoSeq),
         ("encrypted_content_info", _EncryptedContentInfoSeq),
     ]
+
+
 from cms_lib.canonical import canonical_headers, IGNORED_HEADERS
+
+
 def _build_signed_attributes(
     body:         bytes,
     content_type: str  = "application/json",
@@ -143,6 +182,8 @@ def _build_signed_attributes(
         _cms_log.debug("[CMS]   3. signing-time    = %s", signing_time)
         _cms_log.debug("[CMS]   DER total          = %d bytes", len(signed_attrs_der))
     return signed_attrs_der
+
+
 def _parse_signed_attributes(signed_attrs_der: bytes) -> dict:
     result = {}
     pos = 0
@@ -212,20 +253,28 @@ def _parse_signed_attributes(signed_attrs_der: bytes) -> dict:
         elif val_tag == 0x04:
             result[name] = val_bytes
     return result
+
+
 def compute_content_digest(body: bytes) -> str:
     raw = hashlib.sha256(body).digest()
     return f"sha-256=:{base64.b64encode(raw).decode('ascii')}:"
+
+
 def _pss_padding() -> asym_padding.PSS:
     return asym_padding.PSS(
         mgf=asym_padding.MGF1(hashes.SHA256()),
         salt_length=asym_padding.PSS.DIGEST_LENGTH,
     )
+
+
 def _oaep_padding() -> asym_padding.OAEP:
     return asym_padding.OAEP(
         mgf=asym_padding.MGF1(hashes.SHA256()),
         algorithm=hashes.SHA256(),
         label=None,
     )
+
+
 def cms_pack(
     body:             bytes,
     signer_key:       RSAPrivateKey,
@@ -280,40 +329,98 @@ def cms_pack(
         encrypted_content_info,
     )
     return cms_der
+
+
+_SIGNING_TIME_WINDOW_SECS: int = 300
+
+
 def cms_unpack(
     cms_der:       bytes,
     recipient_key: RSAPrivateKey,
+    trusted_cert:  Certificate | None = None,
 ) -> tuple[bytes, bool]:
+    """Unpack, decrypt, dan verify sebuah CMS package.
+    Args:
+        cms_der:       DER-encoded CMS package.
+        recipient_key: Private key penerima untuk dekripsi AES key.
+        trusted_cert:  Sertifikat yang dipercaya sebagai pengirim.
+                       Jika diberikan, signer cert di dalam paket HARUS cocok
+                       byte-for-byte dengan sertifikat ini.  Jika None, validasi
+                       identity signer dilewati (tidak disarankan untuk produksi).
+    Returns:
+        (plaintext_body, sig_valid)
+        sig_valid=False jika identity check gagal, message-digest tidak cocok,
+        signing-time di luar window, atau signature RSA-PSS tidak valid.
+    """
     pkg = _CMSPackageSeq.load(cms_der)
     signer_cert_der     = bytes(pkg["signer_info"]["signer_certificate"].native)
     signed_attrs_der    = bytes(pkg["signer_info"]["signed_attributes"].native)
     signature           = bytes(pkg["signer_info"]["signature"].native)
-    encrypted_key_bytes  = bytes(pkg["recipient_info"]["encrypted_key"].native)
-    iv                   = bytes(pkg["encrypted_content_info"]["iv"].native)
+    encrypted_key_bytes = bytes(pkg["recipient_info"]["encrypted_key"].native)
+    iv                  = bytes(pkg["encrypted_content_info"]["iv"].native)
     encrypted_body_bytes = bytes(pkg["encrypted_content_info"]["encrypted_content"].native)
     aes_key = recipient_key.decrypt(encrypted_key_bytes, _oaep_padding())
-    aesgcm = AESGCM(aes_key)
-    body   = aesgcm.decrypt(iv, encrypted_body_bytes, None)
+    body    = AESGCM(aes_key).decrypt(iv, encrypted_body_bytes, None)
+    if trusted_cert is not None:
+        trusted_der = trusted_cert.public_bytes(serialization.Encoding.DER)
+        if signer_cert_der != trusted_der:
+            _cms_log.warning(
+                "[CMS] [SECURITY] Signer cert TIDAK COCOK dengan trusted cert — "
+                "kemungkinan paket CMS palsu atau cert diinjeksi. Tolak request."
+            )
+            return body, False
     sig_attrs = _parse_signed_attributes(signed_attrs_der)
     embedded_digest = sig_attrs.get("message-digest")
-    if isinstance(embedded_digest, bytes):
-        actual_digest = hashlib.sha256(body).digest()
-        if actual_digest != embedded_digest:
+    if not isinstance(embedded_digest, bytes):
+        _cms_log.warning("[CMS] message-digest tidak ditemukan di signed_attributes.")
+        return body, False
+    actual_digest = hashlib.sha256(body).digest()
+    if actual_digest != embedded_digest:
+        _cms_log.warning(
+            "[CMS] message-digest TIDAK COCOK — body mungkin dimanipulasi."
+        )
+        return body, False
+    signing_time_str = sig_attrs.get("signing-time")
+    if not isinstance(signing_time_str, str):
+        _cms_log.warning("[CMS] signing-time tidak ditemukan di signed_attributes.")
+        return body, False
+    try:
+        signing_dt = datetime.strptime(signing_time_str, "%Y-%m-%dT%H:%M:%SZ").replace(
+            tzinfo=timezone.utc
+        )
+        now_dt  = datetime.now(tz=timezone.utc)
+        skew    = abs((now_dt - signing_dt).total_seconds())
+        if skew > _SIGNING_TIME_WINDOW_SECS:
+            _cms_log.warning(
+                "[CMS] [SECURITY] signing-time di luar window (%ds > %ds) — "
+                "kemungkinan replay attack. signing-time=%s, now=%s",
+                int(skew), _SIGNING_TIME_WINDOW_SECS,
+                signing_time_str, now_dt.strftime("%Y-%m-%dT%H:%M:%SZ"),
+            )
             return body, False
-    else:
+        _cms_log.debug(
+            "[CMS] signing-time OK — skew=%ds (window=%ds)",
+            int(skew), _SIGNING_TIME_WINDOW_SECS,
+        )
+    except (ValueError, TypeError) as exc:
+        _cms_log.warning("[CMS] Gagal parse signing-time '%s': %s", signing_time_str, exc)
         return body, False
     sig_valid = False
     try:
-        signer_cert   = x509.load_der_x509_certificate(signer_cert_der)
-        signer_pubkey = signer_cert.public_key()
+        signer_cert    = x509.load_der_x509_certificate(signer_cert_der)
+        signer_pubkey  = signer_cert.public_key()
         signing_digest = hashlib.sha256(signed_attrs_der).digest()
         signer_pubkey.verify(signature, signing_digest, _pss_padding(), hashes.SHA256())
         sig_valid = True
     except InvalidSignature:
+        _cms_log.warning("[CMS] RSA-PSS signature TIDAK VALID.")
         sig_valid = False
-    except Exception:
+    except Exception as exc:
+        _cms_log.warning("[CMS] Error saat verifikasi signature: %s", exc)
         sig_valid = False
     return body, sig_valid
+
+
 def cms_verify_signature(
     cms_der:      bytes,
     trusted_cert: Certificate,
