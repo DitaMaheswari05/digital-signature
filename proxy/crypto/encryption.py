@@ -7,7 +7,7 @@ from cryptography.hazmat.primitives.asymmetric import padding as asym_padding
 from cryptography.hazmat.primitives.asymmetric.rsa import RSAPublicKey, RSAPrivateKey
 from cryptography.x509 import Certificate
 
-from component import _to_bytes, _extract_public_key
+from .component import _to_bytes, _extract_public_key
 
 
 def _oaep_padding() -> asym_padding.OAEP:

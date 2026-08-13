@@ -8,7 +8,7 @@ from cryptography.hazmat.primitives.asymmetric import padding as asym_padding
 from cryptography.hazmat.primitives.asymmetric.rsa import RSAPublicKey
 from cryptography.x509 import Certificate
 
-from component import _to_bytes, _extract_public_key
+from .component import _to_bytes, _extract_public_key
 
 
 def _pss_padding() -> asym_padding.PSS:
