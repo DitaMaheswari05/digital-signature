@@ -2,11 +2,14 @@ services:
   proxy:
     build: ./proxy
     ports: ["8080:8080"]
+    environment:
+      - PROMETHEUS_MULTIPROC_DIR=/tmp/multiproc
     volumes:
       - ./key_cert:/key_cert:ro
       - ./shared:/shared:ro
     networks:
       - mtls-net
+      - monitoring-net
     depends_on:
       - waf
 
@@ -31,6 +34,7 @@ services:
       - ./shared:/shared:ro
     networks:
       - mtls-net
+      - monitoring-net
 
   webapp:
     build: ./webapp
@@ -49,6 +53,128 @@ services:
     stdin_open: true
     tty: true
 
+
+  prometheus:
+    image: prom/prometheus:v2.53.0
+    container_name: prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./monitoring/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--storage.tsdb.retention.time=7d'
+      - '--web.enable-lifecycle'
+      - '--web.cors.origin=.*'
+    networks:
+      - monitoring-net
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:10.4.3
+    container_name: grafana
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_USERS_ALLOW_SIGN_UP=false
+      - GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH=/etc/grafana/dashboards/mtls_proxy_dashboard.json
+      - GF_SECURITY_ALLOW_EMBEDDING=true
+      - GF_AUTH_ANONYMOUS_ENABLED=true
+      - GF_AUTH_ANONYMOUS_ORG_ROLE=Viewer
+    volumes:
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./monitoring/grafana/dashboards:/etc/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana
+    networks:
+      - monitoring-net
+    depends_on:
+      - prometheus
+      - loki
+    restart: unless-stopped
+
+  loki:
+    image: grafana/loki:2.9.8
+    container_name: loki
+    ports:
+      - "3100:3100"
+    volumes:
+      - ./monitoring/loki/loki-config.yml:/etc/loki/loki-config.yml:ro
+      - loki-data:/loki
+    command: -config.file=/etc/loki/loki-config.yml
+    networks:
+      - monitoring-net
+    restart: unless-stopped
+
+  promtail:
+    image: grafana/promtail:2.9.8
+    container_name: promtail
+    volumes:
+      - ./monitoring/promtail/promtail-config.yml:/etc/promtail/promtail-config.yml:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    command: -config.file=/etc/promtail/promtail-config.yml
+    networks:
+      - monitoring-net
+    depends_on:
+      - loki
+    restart: unless-stopped
+
+  blackbox-exporter:
+    image: prom/blackbox-exporter:v0.25.0
+    container_name: blackbox-exporter
+    volumes:
+      - ./monitoring/prometheus/blackbox.yml:/etc/blackbox_exporter/config.yml:ro
+    networks:
+      - monitoring-net
+      - mtls-net
+    restart: unless-stopped
+
+
+  plow-proxy:
+    build: ./monitoring/plow
+    container_name: plow-proxy
+    profiles:
+      - loadtest
+    environment:
+      - PROXY_URL=http://proxy:8080
+      - REQUESTS=5000
+      - CONCURRENCY=20
+    entrypoint: ["/bin/sh", "/scripts/plow-proxy.sh"]
+    volumes:
+      - ./monitoring/plow:/scripts:ro
+    networks:
+      - mtls-net
+    depends_on:
+      - proxy
+
+  plow-e2e:
+    build: ./monitoring/plow
+    container_name: plow-e2e
+    profiles:
+      - loadtest
+    environment:
+      - PROXY_URL=http://proxy:8080
+      - TARGET_PATH=/api/data
+      - REQUESTS=10000
+      - CONCURRENCY=50
+    entrypoint: ["/bin/sh", "/scripts/plow-e2e.sh"]
+    volumes:
+      - ./monitoring/plow:/scripts:ro
+    networks:
+      - mtls-net
+    depends_on:
+      - proxy
+
 networks:
   mtls-net:
     driver: bridge
+  monitoring-net:
+    driver: bridge
+
+volumes:
+  prometheus-data:
+  grafana-data:
+  loki-data:
