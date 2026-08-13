@@ -1,0 +1,8 @@
+# Normalize line endings for all files
+* text=auto
+
+# Force LF for shell scripts (Linux containers)
+*.sh text eol=lf
+Dockerfile text eol=lf
+docker-compose*.yml text eol=lf
+*.conf text eol=lf

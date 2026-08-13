@@ -1,4 +1,6 @@
-﻿
+﻿#!/bin/sh
+set -e
+
 SRC_DIR=/etc/pki/key_cert
 OUT_DIR=/etc/pki/runtime
 
@@ -25,7 +27,7 @@ CRT_MOD=$(openssl x509 -in "$SRC_DIR/servercert.crt" -noout -modulus 2>/dev/null
 if [ "$KEY_MOD" = "$CRT_MOD" ]; then
     echo "  OK: servercert.key dan servercert.crt cocok"
 else
-    echo "  WARNING: key/cert mismatch â€” cek apakah servercert.key sesuai dengan servercert.crt"
+    echo "  WARNING: key/cert mismatch -- cek apakah servercert.key sesuai dengan servercert.crt"
 fi
 
 echo ""
@@ -34,3 +36,5 @@ openssl verify -CAfile "$OUT_DIR/client-ca-bundle.crt" \
                "$SRC_DIR/clientcert.crt" 2>/dev/null \
     && echo "  OK: clientcert.crt valid terhadap client-ca-bundle.crt" \
     || echo "  INFO: clientcert.crt tidak terverifikasi CA bundle (nginx pakai optional_no_ca)"
+
+exec "$@"
