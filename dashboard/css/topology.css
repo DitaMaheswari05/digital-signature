@@ -1,0 +1,244 @@
+.topology-canvas {
+  flex: 1;
+  position: relative;
+  overflow: hidden;
+}
+.topology-canvas svg {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+.step-narration {
+  width: 260px;
+  flex-shrink: 0;
+  background: var(--bg-card);
+  border-left: 1px solid var(--border-subtle);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.narration-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+  border-bottom: 1px solid var(--border-subtle);
+  background: var(--bg-700);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  flex-shrink: 0;
+}
+.narration-icon { font-size: 1em; }
+.narration-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 12px 14px;
+}
+.narration-idle {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  text-align: center;
+  margin-top: 16px;
+  font-style: italic;
+  line-height: 1.6;
+}
+.topo-node-group { cursor: default; }
+.topo-node-bg {
+  fill: var(--bg-card);
+  stroke: var(--border-medium);
+  stroke-width: 1.5;
+  transition: fill 0.3s, stroke 0.3s;
+  rx: 10;
+}
+.topo-node-bg.status-idle {
+  fill: #0d1422;
+  stroke: rgba(255,255,255,0.12);
+}
+.topo-node-bg.status-active {
+  fill: rgba(34, 211, 238, 0.08);
+  stroke: var(--cyan-400);
+  filter: drop-shadow(0 0 8px rgba(34,211,238,0.35));
+}
+.topo-node-bg.status-success {
+  fill: rgba(52, 211, 153, 0.08);
+  stroke: var(--emerald-400);
+  filter: drop-shadow(0 0 8px rgba(52,211,153,0.35));
+}
+.topo-node-bg.status-error {
+  fill: rgba(244, 63, 94, 0.1);
+  stroke: var(--rose-400);
+  filter: drop-shadow(0 0 8px rgba(244,63,94,0.4));
+}
+.topo-node-bg.status-warn {
+  fill: rgba(251, 191, 36, 0.08);
+  stroke: var(--amber-400);
+  filter: drop-shadow(0 0 8px rgba(251,191,36,0.3));
+}
+.topo-icon-circle {
+  fill: var(--bg-700);
+  transition: fill 0.3s;
+}
+.status-active .topo-icon-circle  { fill: rgba(34,211,238,0.15); }
+.status-success .topo-icon-circle { fill: rgba(52,211,153,0.15); }
+.status-error .topo-icon-circle   { fill: rgba(244,63,94,0.15); }
+.status-warn .topo-icon-circle    { fill: rgba(251,191,36,0.1); }
+.topo-node-title {
+  font-family: 'Inter', sans-serif;
+  font-size: 11px;
+  font-weight: 600;
+  fill: var(--text-primary);
+}
+.topo-node-sub {
+  font-family: 'Inter', sans-serif;
+  font-size: 9px;
+  fill: var(--text-muted);
+}
+.topo-node-step {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 8px;
+  fill: var(--cyan-400);
+  letter-spacing: 0.05em;
+}
+.topo-status-text {
+  font-family: 'Inter', sans-serif;
+  font-size: 9px;
+  font-weight: 600;
+  transition: fill 0.3s;
+}
+.topo-status-idle    { fill: var(--text-muted); }
+.topo-status-active  { fill: var(--cyan-400); }
+.topo-status-success { fill: var(--emerald-400); }
+.topo-status-error   { fill: var(--rose-400); }
+.topo-status-warn    { fill: var(--amber-400); }
+.topo-connection {
+  fill: none;
+  stroke: var(--border-medium);
+  stroke-width: 2;
+  stroke-dasharray: 6 4;
+  transition: stroke 0.4s;
+}
+.topo-connection.active {
+  stroke: var(--cyan-400);
+  stroke-dasharray: none;
+  filter: drop-shadow(0 0 4px rgba(34,211,238,0.5));
+}
+.topo-connection.success {
+  stroke: var(--emerald-400);
+  stroke-dasharray: none;
+  filter: drop-shadow(0 0 4px rgba(52,211,153,0.4));
+}
+.topo-connection.error {
+  stroke: var(--rose-400);
+  stroke-dasharray: none;
+  filter: drop-shadow(0 0 4px rgba(244,63,94,0.4));
+}
+.topo-conn-label {
+  font-family: 'Inter', sans-serif;
+  font-size: 8.5px;
+  fill: var(--text-muted);
+}
+.topo-conn-label.active { fill: var(--cyan-400); }
+.topo-conn-label.success { fill: var(--emerald-400); }
+.topo-conn-label.error { fill: var(--rose-400); }
+.topo-packet {
+  r: 6;
+  fill: var(--cyan-400);
+  filter: drop-shadow(0 0 5px var(--cyan-400));
+}
+.topo-packet.blocked {
+  fill: var(--rose-400);
+  filter: drop-shadow(0 0 7px var(--rose-400));
+}
+.topo-packet.success {
+  fill: var(--emerald-400);
+  filter: drop-shadow(0 0 5px var(--emerald-400));
+}
+.topo-cert-label {
+  font-family: 'Inter', sans-serif;
+  font-size: 8px;
+  fill: var(--text-muted);
+  text-anchor: middle;
+}
+.topo-cert-icon {
+  font-size: 14px;
+}
+@keyframes node-pulse {
+  0%, 100% { opacity: 0.6; r: 22; }
+  50% { opacity: 0.2; r: 28; }
+}
+.topo-pulse-ring {
+  fill: none;
+  stroke: var(--cyan-400);
+  stroke-width: 1.5;
+  opacity: 0;
+}
+.topo-pulse-ring.pulsing {
+  animation: node-pulse 1.5s ease-in-out infinite;
+  opacity: 0.6;
+}
+@keyframes node-shake {
+  0%, 100% { transform: translateX(0); }
+  15%  { transform: translateX(-4px); }
+  30%  { transform: translateX(4px); }
+  45%  { transform: translateX(-3px); }
+  60%  { transform: translateX(3px); }
+  75%  { transform: translateX(-2px); }
+  90%  { transform: translateX(2px); }
+}
+.topo-node-group.shaking {
+  animation: node-shake 0.5s ease-in-out;
+}
+.narration-step {
+  background: var(--bg-700);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  padding: 10px 12px;
+  margin-bottom: 8px;
+  font-size: 0.73rem;
+  line-height: 1.6;
+  color: var(--text-secondary);
+  transition: var(--transition-base);
+  animation: narration-in 0.25s ease-out;
+}
+@keyframes narration-in {
+  from { opacity: 0; transform: translateX(8px); }
+  to   { opacity: 1; transform: translateX(0); }
+}
+.narration-step.step-active {
+  border-color: rgba(34, 211, 238, 0.3);
+  background: rgba(34, 211, 238, 0.04);
+}
+.narration-step.step-success {
+  border-color: rgba(52, 211, 153, 0.3);
+  background: rgba(52, 211, 153, 0.04);
+}
+.narration-step.step-error {
+  border-color: rgba(244, 63, 94, 0.3);
+  background: rgba(244, 63, 94, 0.05);
+}
+.narration-step-num {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.67rem;
+  font-weight: 700;
+  color: var(--cyan-400);
+  letter-spacing: 0.05em;
+  margin-bottom: 4px;
+}
+.narration-step.step-error .narration-step-num { color: var(--rose-400); }
+.narration-step.step-success .narration-step-num { color: var(--emerald-400); }
+.narration-step-text {
+  color: var(--text-secondary);
+}
+.narration-step-detail {
+  margin-top: 6px;
+  font-size: 0.68rem;
+  color: var(--text-muted);
+  font-family: 'JetBrains Mono', monospace;
+  background: var(--bg-900);
+  border-radius: 4px;
+  padding: 4px 6px;
+  word-break: break-all;
+}

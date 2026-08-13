@@ -1,4 +1,6 @@
 import os
+import sys
+import time
 import logging
 import urllib.parse
 from pathlib import Path
@@ -11,7 +13,21 @@ from crypto_utils import (
     verify_cert_trusted,
 )
 from cms_verifier import verify_cms_signature
+from metrics import record_mtls_result
+_SHARED_LIB = Path(__file__).resolve().parent.parent.parent / "shared"
+if str(_SHARED_LIB) not in sys.path:
+    sys.path.insert(0, str(_SHARED_LIB))
+try:
+    from audit_logger import log_event as _audit_log_event
+except Exception:
+    def _audit_log_event(*args, **kwargs):
+        pass
 app = FastAPI()
+try:
+    from metrics import setup_waf_metrics
+    setup_waf_metrics(app)
+except Exception:
+    pass
 logging.basicConfig(
     level=logging.DEBUG,
     format="[%(asctime)s] [waf-service] [%(levelname)s] %(message)s",
@@ -23,6 +39,8 @@ _DOCKER_KEYCERT = Path("/key_cert")
 _LOCAL_KEYCERT  = Path(__file__).resolve().parent.parent.parent.parent / "key_cert"
 KEYCERT_DIR = _DOCKER_KEYCERT if _DOCKER_KEYCERT.is_dir() else _LOCAL_KEYCERT
 _CA_BUNDLE_FILE = KEYCERT_DIR / "clientca_rootca_.pem"
+
+
 @lru_cache(maxsize=1)
 def _get_trusted_cas():
     if not _CA_BUNDLE_FILE.exists():
@@ -34,6 +52,8 @@ def _get_trusted_cas():
     if not cas:
         raise RuntimeError(f"CA bundle kosong atau tidak valid: {_CA_BUNDLE_FILE}")
     return cas
+
+
 @app.on_event("startup")
 async def startup_event():
     try:
@@ -41,6 +61,8 @@ async def startup_event():
         log.info("CA bundle loaded: %d CA cert(s) dari %s", len(cas), _CA_BUNDLE_FILE)
     except Exception as e:
         log.warning("Gagal load CA bundle saat startup: %s", e)
+
+
 @app.post("/verify")
 async def verify_request(
     request: Request,
@@ -49,6 +71,7 @@ async def verify_request(
     x_ssl_client_s_dn:   Optional[str] = Header(None),
     x_original_method:   Optional[str] = Header(None),
 ):
+    _request_start = time.perf_counter()
     method = (x_original_method or request.method).upper()
     log.info(_SEP)
     log.info("[Step 3] Menerima subrequest verifikasi | method=%s", method)
@@ -60,6 +83,16 @@ async def verify_request(
             "[Step 3 | Layer 1]  GAGAL — X-SSL-Client-Verify='%s'",
             x_ssl_client_verify,
         )
+        record_mtls_result(success=False)
+        _audit_log_event(
+            request_id=request.headers.get("x-request-id", ""),
+            step=3,
+            service="waf_service",
+            client_subject=x_ssl_client_s_dn or "",
+            result="rejected",
+            reason=f"mTLS transport gagal: X-SSL-Client-Verify='{x_ssl_client_verify}'",
+            latency_ms=int((time.perf_counter() - _request_start) * 1000),
+        )
         raise HTTPException(
             status_code=401,
             detail=(
@@ -69,6 +102,7 @@ async def verify_request(
             ),
         )
     log.info("[Step 3 | Layer 1]  mTLS transport OK — client cert diterima nginx")
+    record_mtls_result(success=True)
     client_cert = None
     cert_source = None
     if x_ssl_client_cert:
@@ -125,6 +159,15 @@ async def verify_request(
     log.info("[Step 3]  SEMUA LAYER PASSED — request diotorisasi untuk diteruskan ke WebApp")
     log.info("[Step 3]   client: %s", subject_str)
     log.info(_SEP)
+    _audit_log_event(
+        request_id=request.headers.get("x-request-id", ""),
+        step=3,
+        service="waf_service",
+        client_subject=subject_str,
+        result="success",
+        reason="Semua 3 layer verifikasi passed (mTLS + CA + CMS)",
+        latency_ms=int((time.perf_counter() - _request_start) * 1000),
+    )
     return {
         "status": "ok",
         "cert_source": cert_source,

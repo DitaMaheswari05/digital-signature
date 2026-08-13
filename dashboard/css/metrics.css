@@ -1,0 +1,232 @@
+.metrics-panel {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--bg-900);
+}
+.grafana-conn-status {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.7rem;
+  color: var(--text-muted);
+}
+.grafana-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--text-muted);
+  transition: var(--transition-base);
+}
+.grafana-dot.online {
+  background: var(--emerald-400);
+  box-shadow: 0 0 6px var(--emerald-400);
+  animation: status-pulse 2s ease-in-out infinite;
+}
+.grafana-dot.offline { background: var(--rose-400); }
+.grafana-dot.loading { background: var(--amber-400); }
+.grafana-tabs {
+  display: flex;
+  gap: 2px;
+  padding: 8px 12px 0;
+  background: var(--bg-800);
+  border-bottom: 1px solid var(--border-subtle);
+  flex-shrink: 0;
+}
+.grafana-tab {
+  padding: 6px 14px;
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  border-radius: var(--radius-sm) var(--radius-sm) 0 0;
+  color: var(--text-muted);
+  font-family: 'Inter', sans-serif;
+  font-size: 0.75rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: var(--transition-fast);
+  margin-bottom: -1px;
+}
+.grafana-tab:hover {
+  color: var(--text-secondary);
+  background: rgba(255,255,255,0.04);
+}
+.grafana-tab.active {
+  color: var(--cyan-400);
+  border-bottom-color: var(--cyan-400);
+  background: rgba(34, 211, 238, 0.05);
+}
+.stat-cards {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 8px;
+  padding: 10px 12px;
+  background: var(--bg-800);
+  border-bottom: 1px solid var(--border-subtle);
+  flex-shrink: 0;
+}
+.stat-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  padding: 8px 10px;
+  text-align: center;
+  transition: var(--transition-base);
+}
+.stat-card:hover {
+  border-color: var(--border-medium);
+  background: var(--bg-card-hover);
+}
+.stat-card-success {
+  border-color: rgba(52, 211, 153, 0.2);
+}
+.stat-card-success:hover {
+  border-color: rgba(52, 211, 153, 0.4);
+}
+.stat-card-warn {
+  border-color: rgba(244, 63, 94, 0.2);
+}
+.stat-card-warn:hover {
+  border-color: rgba(244, 63, 94, 0.4);
+}
+.stat-value {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 1.05rem;
+  font-weight: 700;
+  color: var(--text-primary);
+  line-height: 1.2;
+  transition: var(--transition-fast);
+}
+.stat-card-success .stat-value { color: var(--emerald-400); }
+.stat-card-warn .stat-value { color: var(--rose-400); }
+.stat-label {
+  font-size: 0.62rem;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  margin-top: 3px;
+}
+@keyframes stat-flash {
+  0%   { transform: scale(1.1); }
+  100% { transform: scale(1); }
+}
+.stat-value.updating {
+  animation: stat-flash 0.2s ease-out;
+}
+.native-log-container {
+  flex: 1;
+  position: relative;
+  overflow: hidden;
+  background: var(--bg-900);
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.native-logs {
+  flex: 1;
+  overflow-y: auto;
+  padding: 12px;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+  line-height: 1.4;
+}
+.log-line {
+  margin-bottom: 4px;
+  word-break: break-all;
+  border-bottom: 1px solid rgba(255,255,255,0.02);
+  padding-bottom: 4px;
+}
+.log-line:last-child {
+  border-bottom: none;
+}
+.log-timestamp {
+  color: var(--text-muted);
+  margin-right: 8px;
+}
+.log-source {
+  display: inline-block;
+  padding: 1px 5px;
+  border-radius: 3px;
+  font-size: 0.65rem;
+  margin-right: 8px;
+  background: rgba(255,255,255,0.1);
+  color: #fff;
+}
+.log-source.proxy { background: rgba(59, 130, 246, 0.2); color: var(--blue-400); }
+.log-source.waf { background: rgba(234, 179, 8, 0.2); color: var(--amber-400); }
+.log-source.webapp { background: rgba(16, 185, 129, 0.2); color: var(--emerald-400); }
+.grafana-loading {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  background: var(--bg-900);
+}
+.grafana-loading p {
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  text-align: center;
+}
+.grafana-spinner {
+  width: 32px;
+  height: 32px;
+  border: 2px solid var(--border-medium);
+  border-top-color: var(--cyan-400);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+.grafana-offline {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  background: var(--bg-900);
+  text-align: center;
+  padding: 24px;
+}
+.offline-icon {
+  font-size: 2.5rem;
+  opacity: 0.5;
+}
+.grafana-offline p {
+  font-size: 0.82rem;
+  color: var(--text-secondary);
+}
+.grafana-offline code {
+  display: inline-block;
+  background: var(--bg-700);
+  color: var(--cyan-400);
+  padding: 6px 12px;
+  border-radius: var(--radius-sm);
+  font-size: 0.72rem;
+  font-family: 'JetBrains Mono', monospace;
+  margin-top: 4px;
+}
+.btn-retry {
+  margin-top: 8px;
+  padding: 7px 18px;
+  background: rgba(34, 211, 238, 0.1);
+  border: 1px solid rgba(34, 211, 238, 0.3);
+  border-radius: var(--radius-md);
+  color: var(--cyan-400);
+  font-family: 'Inter', sans-serif;
+  font-size: 0.78rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: var(--transition-base);
+}
+.btn-retry:hover {
+  background: rgba(34, 211, 238, 0.15);
+  border-color: var(--cyan-400);
+  box-shadow: var(--shadow-cyan);
+}

@@ -1,4 +1,7 @@
 flask==3.0.3
+flask-cors==4.0.1
 requests==2.32.3
 cryptography==43.0.1
 asn1crypto                   # DER/ASN.1 parsing untuk CMS (RFC 5652)
+prometheus-flask-exporter==0.23.1
+gunicorn==22.0.0             # Production WSGI server — menggantikan Flask dev server

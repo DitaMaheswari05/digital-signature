@@ -1,0 +1,48 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  - job_name: "proxy"
+    static_configs:
+      - targets: ["proxy:8080"]
+    metrics_path: /metrics
+
+  - job_name: "waf_service"
+    static_configs:
+      - targets: ["waf_service:9000"]
+    metrics_path: /metrics
+
+  - job_name: "blackbox_proxy"
+    metrics_path: /probe
+    params:
+      module: [http_2xx]
+    static_configs:
+      - targets:
+          - http://proxy:8080/healthz
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: __param_target
+      - source_labels: [__param_target]
+        target_label: instance
+      - target_label: __address__
+        replacement: blackbox-exporter:9115
+
+  - job_name: "blackbox_waf_service"
+    metrics_path: /probe
+    params:
+      module: [http_2xx]
+    static_configs:
+      - targets:
+          - http://waf_service:9000/docs
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: __param_target
+      - source_labels: [__param_target]
+        target_label: instance
+      - target_label: __address__
+        replacement: blackbox-exporter:9115
+
+  - job_name: "prometheus"
+    static_configs:
+      - targets: ["localhost:9090"]
