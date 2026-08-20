@@ -4,6 +4,7 @@ services:
     ports: ["8080:8080"]
     environment:
       - PROMETHEUS_MULTIPROC_DIR=/tmp/multiproc
+      - AUDIT_API_URL=http://audit_api:8000/logs
     volumes:
       - ./key_cert:/key_cert:ro
       - ./shared:/shared:ro
@@ -12,6 +13,7 @@ services:
       - monitoring-net
     depends_on:
       - waf
+      - audit_api
 
   waf:
     build: ./waf
@@ -32,9 +34,13 @@ services:
     volumes:
       - ./key_cert:/key_cert:ro
       - ./shared:/shared:ro
+    environment:
+      - AUDIT_API_URL=http://audit_api:8000/logs
     networks:
       - mtls-net
       - monitoring-net
+    depends_on:
+      - audit_api
 
   webapp:
     build: ./webapp
@@ -101,10 +107,12 @@ services:
     container_name: loki
     ports:
       - "3100:3100"
+    environment:
+      - LOKI_RETENTION_DAYS=${LOKI_RETENTION_DAYS:-30}
     volumes:
       - ./monitoring/loki/loki-config.yml:/etc/loki/loki-config.yml:ro
       - loki-data:/loki
-    command: -config.file=/etc/loki/loki-config.yml
+    command: -config.file=/etc/loki/loki-config.yml -config.expand-env=true
     networks:
       - monitoring-net
     restart: unless-stopped
@@ -167,6 +175,55 @@ services:
       - mtls-net
     depends_on:
       - proxy
+      
+  postgres:
+    image: postgres:16-alpine
+    container_name: postgres
+    environment:
+      - POSTGRES_DB=audit_db
+      - POSTGRES_USER=audituser
+      - POSTGRES_PASSWORD=auditpass
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    networks:
+      - monitoring-net
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U audituser -d audit_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  audit_api:
+    build: ./audit_api
+    container_name: audit_api
+    ports:
+      - "8000:8000"
+    environment:
+      - POSTGRES_HOST=postgres
+      - POSTGRES_PORT=5432
+      - POSTGRES_DB=audit_db
+      - POSTGRES_USER=audituser
+      - POSTGRES_PASSWORD=auditpass
+      - AUDIT_RETENTION_MONTHS=${AUDIT_RETENTION_MONTHS:-60}
+    networks:
+      - mtls-net
+      - monitoring-net
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+  audit_dashboard:
+    build: ./audit_dashboard
+    container_name: audit_dashboard
+    ports:
+      - "8081:80"
+    networks:
+      - monitoring-net
+    depends_on:
+      - audit_api
+    restart: unless-stopped
 
 networks:
   mtls-net:
@@ -178,3 +235,4 @@ volumes:
   prometheus-data:
   grafana-data:
   loki-data:
+  postgres-data:

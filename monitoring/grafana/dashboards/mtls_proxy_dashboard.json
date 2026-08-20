@@ -30,7 +30,7 @@
       "collapsed": false,
       "gridPos": {"h": 1, "w": 24, "x": 0, "y": 0},
       "id": 100,
-      "title": "🚀 Row 1 — Executive Overview",
+      "title": "Row 1 — Executive Overview",
       "type": "row"
     },
 
@@ -530,9 +530,7 @@
           "queryType": "range",
           "refId": "A"
         }
-      ],
-      "title": "Blocked Requests — Real-time Log (IP & Reason)",
-      "type": "logs"
+      ]
     },
 
     {
