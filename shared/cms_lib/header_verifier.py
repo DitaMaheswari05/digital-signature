@@ -4,6 +4,8 @@ import logging
 from typing import Optional, Tuple
 from asn1crypto import core as asn1_core
 _log = logging.getLogger("cms_lib.header_verifier")
+from .canonical import canonical_headers, IGNORED_HEADERS
+
 class _SignerInfoSeq(asn1_core.Sequence):
     _fields = [
         ("signer_certificate",  asn1_core.OctetString),
@@ -30,12 +32,9 @@ class _CMSPackageSeq(asn1_core.Sequence):
         ("recipient_info",         _RecipientInfoSeq),
         ("encrypted_content_info", _EncryptedContentInfoSeq),
     ]
-from .canonical import canonical_headers, IGNORED_HEADERS
+
+
 def _parse_signed_attributes(signed_attrs_der: bytes) -> dict:
-    """
-    Parse DER-encoded SignedAttributes SET dan kembalikan dict nama→nilai.
-    Mendukung nilai UTF8String (tag 0x0C) dan OctetString (tag 0x04).
-    """
     result: dict = {}
     raw = signed_attrs_der
     if len(raw) < 2:
@@ -92,6 +91,7 @@ def _parse_signed_attributes(signed_attrs_der: bytes) -> dict:
         elif val_tag == 0x04:
             result[name] = val_bytes
     return result
+
 def verify_cms_headers(
     request_headers: dict,
     cms_b64: str,

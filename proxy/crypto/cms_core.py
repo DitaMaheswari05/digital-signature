@@ -15,9 +15,8 @@ from cryptography.hazmat.primitives.asymmetric import padding as asym_padding
 from cryptography.hazmat.primitives.asymmetric.rsa import RSAPrivateKey, RSAPublicKey
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.x509 import Certificate
+from cms_lib.canonical import canonical_headers, IGNORED_HEADERS
 
-# Inject shared/ ke sys.path agar cms_lib bisa di-import
-# Di Docker: /shared di-mount via volume; secara lokal: ../../../shared relatif dari file ini
 for _shared_candidate in (
     Path("/shared"),
     Path(__file__).resolve().parent.parent.parent / "shared",
@@ -113,9 +112,6 @@ class _CMSPackageSeq(asn1_core.Sequence):
     ]
 
 
-from cms_lib.canonical import canonical_headers, IGNORED_HEADERS
-
-
 def _build_signed_attributes(
     body:         bytes,
     content_type: str  = "application/json",
@@ -127,18 +123,22 @@ def _build_signed_attributes(
         "[CMS] message-digest = SHA-256(payload) = %s...%s  (%d bytes)",
         body_digest.hex()[:16], body_digest.hex()[-8:], len(body_digest),
     )
+    
     attr_content_type = _der_seq(
         _der_utf8("content-type"),
         _der_utf8(content_type),
     )
+    
     attr_message_digest = _der_seq(
         _der_utf8("message-digest"),
         _der_octet(body_digest),
     )
+    
     attr_signing_time = _der_seq(
         _der_utf8("signing-time"),
         _der_utf8(signing_time),
     )
+    
     if headers:
         _cms_log.debug("[CMS] Headers diterima (belum di-sort) — %d header:", len(headers))
         for k, v in headers.items():
@@ -170,12 +170,14 @@ def _build_signed_attributes(
         _cms_log.debug("[CMS]   3. message-digest  = SHA-256(payload_bytes)")
         _cms_log.debug("[CMS]   4. signing-time    = %s", signing_time)
         _cms_log.debug("[CMS]   DER total          = %d bytes", len(signed_attrs_der))
+        
     else:
         signed_attrs_der = _der_set(
             attr_content_type,
             attr_message_digest,
             attr_signing_time,
         )
+        
         _cms_log.debug("[CMS] SignedAttributes SET :")
         _cms_log.debug("[CMS]   1. content-type   = %s", content_type)
         _cms_log.debug("[CMS]   2. message-digest  = SHA-256(payload_bytes)")
@@ -221,9 +223,11 @@ def _parse_signed_attributes(signed_attrs_der: bytes) -> dict:
             i += 3
         else:
             break
+        
         seq_body = inner[i: i + seq_len]
         i += seq_len
         j = 0
+        
         if len(seq_body) < 2 or seq_body[j] != 0x0C:
             continue
         j += 1
@@ -231,11 +235,13 @@ def _parse_signed_attributes(signed_attrs_der: bytes) -> dict:
         j += 1
         name = seq_body[j: j + name_len].decode("utf-8")
         j += name_len
+        
         if j >= len(seq_body):
             continue
         val_tag = seq_body[j]
         j += 1
         val_len_b = seq_body[j]
+        
         if val_len_b < 0x80:
             val_len = val_len_b
             j += 1
@@ -339,19 +345,6 @@ def cms_unpack(
     recipient_key: RSAPrivateKey,
     trusted_cert:  Certificate | None = None,
 ) -> tuple[bytes, bool]:
-    """Unpack, decrypt, dan verify sebuah CMS package.
-    Args:
-        cms_der:       DER-encoded CMS package.
-        recipient_key: Private key penerima untuk dekripsi AES key.
-        trusted_cert:  Sertifikat yang dipercaya sebagai pengirim.
-                       Jika diberikan, signer cert di dalam paket HARUS cocok
-                       byte-for-byte dengan sertifikat ini.  Jika None, validasi
-                       identity signer dilewati (tidak disarankan untuk produksi).
-    Returns:
-        (plaintext_body, sig_valid)
-        sig_valid=False jika identity check gagal, message-digest tidak cocok,
-        signing-time di luar window, atau signature RSA-PSS tidak valid.
-    """
     pkg = _CMSPackageSeq.load(cms_der)
     signer_cert_der     = bytes(pkg["signer_info"]["signer_certificate"].native)
     signed_attrs_der    = bytes(pkg["signer_info"]["signed_attributes"].native)
@@ -361,6 +354,7 @@ def cms_unpack(
     encrypted_body_bytes = bytes(pkg["encrypted_content_info"]["encrypted_content"].native)
     aes_key = recipient_key.decrypt(encrypted_key_bytes, _oaep_padding())
     body    = AESGCM(aes_key).decrypt(iv, encrypted_body_bytes, None)
+    
     if trusted_cert is not None:
         trusted_der = trusted_cert.public_bytes(serialization.Encoding.DER)
         if signer_cert_der != trusted_der:
@@ -369,17 +363,21 @@ def cms_unpack(
                 "kemungkinan paket CMS palsu atau cert diinjeksi. Tolak request."
             )
             return body, False
+        
     sig_attrs = _parse_signed_attributes(signed_attrs_der)
     embedded_digest = sig_attrs.get("message-digest")
+    
     if not isinstance(embedded_digest, bytes):
         _cms_log.warning("[CMS] message-digest tidak ditemukan di signed_attributes.")
         return body, False
     actual_digest = hashlib.sha256(body).digest()
+    
     if actual_digest != embedded_digest:
         _cms_log.warning(
             "[CMS] message-digest TIDAK COCOK — body mungkin dimanipulasi."
         )
         return body, False
+    
     signing_time_str = sig_attrs.get("signing-time")
     if not isinstance(signing_time_str, str):
         _cms_log.warning("[CMS] signing-time tidak ditemukan di signed_attributes.")
@@ -398,10 +396,12 @@ def cms_unpack(
                 signing_time_str, now_dt.strftime("%Y-%m-%dT%H:%M:%SZ"),
             )
             return body, False
+        
         _cms_log.debug(
             "[CMS] signing-time OK — skew=%ds (window=%ds)",
             int(skew), _SIGNING_TIME_WINDOW_SECS,
         )
+        
     except (ValueError, TypeError) as exc:
         _cms_log.warning("[CMS] Gagal parse signing-time '%s': %s", signing_time_str, exc)
         return body, False

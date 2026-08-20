@@ -15,8 +15,7 @@ from cryptography.hazmat.primitives.asymmetric.rsa import RSAPrivateKey, RSAPubl
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.x509 import Certificate
 
-# Inject shared/ ke sys.path agar cms_lib bisa di-import
-# Di Docker: /shared di-mount via volume; secara lokal: ../../shared relatif dari file ini
+
 for _shared_candidate in (
     Path("/shared"),
     Path(__file__).resolve().parent.parent / "shared",
@@ -24,6 +23,8 @@ for _shared_candidate in (
     if _shared_candidate.is_dir() and str(_shared_candidate) not in sys.path:
         sys.path.insert(0, str(_shared_candidate))
         break
+
+from cms_lib.canonical import canonical_headers, IGNORED_HEADERS
 
 _cms_log = logging.getLogger("webapp")
 CMS_VERSION: int = 1
@@ -111,9 +112,6 @@ class _CMSPackageSeq(asn1_core.Sequence):
         ("recipient_info",         _RecipientInfoSeq),
         ("encrypted_content_info", _EncryptedContentInfoSeq),
     ]
-
-
-from cms_lib.canonical import canonical_headers, IGNORED_HEADERS
 
 
 def _build_signed_attributes(
