@@ -7,8 +7,6 @@ import time
 import uuid
 from pathlib import Path
 
-# Inject shared/ ke sys.path SEBELUM import cms_lib
-# Di Docker: /shared di-mount via volume; secara lokal: ../shared relatif dari file ini
 for _shared_candidate in (
     Path("/shared"),
     Path(__file__).resolve().parent.parent / "shared",
@@ -135,16 +133,25 @@ except Exception as _init_err:
     _CLIENT_CERT_OBJ = _WEBAPP_CERT_OBJ = _WEBAPP_PUBKEY = _CLIENT_KEY_OBJ = None
 
 
-def build_request_body(api_body: dict, req_headers: dict | None = None) -> tuple[dict, str]:
+def build_request_body(api_body: dict, req_headers: dict | None = None, demo_scenario: str = "") -> tuple[dict, str]:
     plog.log_build_start()
     payload_str   = json.dumps(api_body, separators=(",", ":"), ensure_ascii=False)
     payload_bytes = payload_str.encode("utf-8")
     plog.log_payload_serialized(len(payload_str))
     plog.log_encrypt_start()
+    signer_key = _CLIENT_KEY_OBJ
+    signer_cert = _CLIENT_CERT_OBJ
+    if demo_scenario == "cert_mismatch":
+        from cryptography.hazmat.primitives.serialization import load_pem_private_key
+        with open("/key_cert/dummycert.crt", "rb") as _f:
+            signer_cert = x509.load_pem_x509_certificate(_f.read())
+        with open("/key_cert/dummycert.key", "rb") as _f:
+            signer_key = load_pem_private_key(_f.read(), password=None)
+            
     cms_der    = cms_pack(
         body=payload_bytes,
-        signer_key=_CLIENT_KEY_OBJ,
-        signer_cert=_CLIENT_CERT_OBJ,
+        signer_key=signer_key,
+        signer_cert=signer_cert,
         recipient_pubkey=_WEBAPP_PUBKEY,
         content_type="application/json",
         headers=req_headers,
@@ -287,10 +294,11 @@ def proxy_handler(path: str):
             if k.lower() not in IGNORED_HEADERS and k.lower() not in ["content-type", "user-agent", "x-request-id"]:
                 outbound_headers[k] = v
         try:
-            request_body, cms_b64 = build_request_body(client_body, outbound_headers)
+            demo_scenario = request.headers.get("X-Demo-Scenario", "normal")
+            _, cms_b64 = build_request_body(client_body, outbound_headers, demo_scenario)
             outbound_headers["X-CMS-Payload"] = cms_b64
             waf_kwargs = {
-                "json": request_body,
+                "json": {"cms_payload": cms_b64},
                 "headers": outbound_headers,
             }
         except Exception as e:
@@ -316,7 +324,15 @@ def proxy_handler(path: str):
             corrupted = payload[:10] + "TAMPERED" + payload[18:]
             outbound_headers["X-CMS-Payload"] = corrupted
             waf_kwargs["headers"] = outbound_headers
-            plog.logger.warning("[DEMO] Payload tampered before sending to WAF.")
+            plog._logger.warning("[DEMO] Payload tampered before sending to WAF.")
+        if demo_scenario == "header_tamper":
+            outbound_headers["X-Test-Signature"] = "TAMPERED"
+            waf_kwargs["headers"] = outbound_headers
+            plog._logger.warning("[DEMO] Header X-Test-Signature disisipkan untuk memicu header mismatch.")
+        if demo_scenario == "mitm":
+            target_url = "https://self-signed.badssl.com/"
+            plog._logger.warning("[DEMO] Redirecting to an untrusted server (self-signed.badssl.com) to simulate MITM interception.")
+
         req = http_requests.Request(
             method=request.method,
             url=target_url,
@@ -326,7 +342,12 @@ def proxy_handler(path: str):
         cert_to_use = (_CLIENT_CERT_FILE, _CLIENT_KEY_FILE)
         if demo_scenario == "bad_cert":
             cert_to_use = None
-            plog.logger.warning("[DEMO] Omitting Client Certificate for bad_cert scenario.")
+            plog._logger.warning("[DEMO] Omitting Client Certificate for bad_cert scenario.")
+        elif demo_scenario == "wrong_cert":
+            cert_to_use = ("/key_cert/dummycert.crt", "/key_cert/dummycert.key")
+            plog._logger.warning("[DEMO] Using INVALID Client Certificate.")
+        elif demo_scenario == "cert_mismatch":
+            plog._logger.warning("[DEMO] Using normal clientcert for mTLS but dummycert for CMS Signer to trigger Layer 3 cert_mismatch.")
         waf_resp = session.send(
             prepared,
             cert=cert_to_use,
@@ -336,6 +357,15 @@ def proxy_handler(path: str):
         plog.log_waf_response(waf_resp.status_code)
         if waf_resp.status_code >= 400:
             plog.log_waf_error(waf_resp.status_code, waf_resp.text)
+            _audit_log_event(
+                request_id=request_id,
+                step=1,
+                service="proxy",
+                client_subject="",
+                result="rejected",
+                reason=f"WAF Block / Status {waf_resp.status_code}: {waf_resp.text[:100]}",
+                latency_ms=int((time.perf_counter() - _handler_start) * 1000),
+            )
             return Response(
                 json.dumps({
                     "error": "WAF memblokir request atau terjadi error di sisi server.",
@@ -346,6 +376,27 @@ def proxy_handler(path: str):
                 content_type="application/json",
                 headers=_make_headers(request_id, cms_verified=False),
             )
+    except http_requests.exceptions.SSLError as e:
+        plog.log_waf_unreachable(e)
+        _audit_log_event(
+            request_id=request_id,
+            step=1,
+            service="proxy",
+            client_subject="",
+            result="failed",
+            reason=f"MITM/SSLError terdeteksi: {e}",
+            latency_ms=int((time.perf_counter() - _handler_start) * 1000),
+        )
+        return Response(
+            json.dumps({
+                "error": "PERINGATAN KEAMANAN: Koneksi dihentikan paksa!",
+                "detail": "Terdeteksi potensi serangan Man-in-the-Middle (MITM) atau Server Spoofing. Sertifikat server tujuan ditolak karena tidak ditandatangani oleh Root CA internal.",
+                "technical_reason": str(e)
+            }),
+            status=502,
+            content_type="application/json",
+            headers=_make_headers(request_id),
+        )
     except Exception as e:
         plog.log_waf_unreachable(e)
         return Response(

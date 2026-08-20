@@ -37,10 +37,18 @@ except ImportError:
     class _FakeDuration:
         def observe(self, v): pass
     CMS_VERIFICATION_DURATION = _FakeDuration()
+    
 _SHARED_LIB = Path(__file__).resolve().parent.parent.parent / "shared"
 if str(_SHARED_LIB) not in sys.path:
     sys.path.insert(0, str(_SHARED_LIB))
+    
+    
 from cms_lib.header_verifier import verify_cms_headers
+try:
+    from audit_logger import log_event as _audit_log_event
+except Exception:
+    def _audit_log_event(*args, **kwargs):
+        pass
 
 
 class _SignerInfoSeq(asn1_core.Sequence):
@@ -100,9 +108,18 @@ async def verify_cms_signature(
 ) -> None:
     _cms_start = time.perf_counter()
 
-    def _record(result: str) -> None:
+    def _record(result: str, reason: str = "") -> None:
         CMS_VERIFICATION_DURATION.observe(time.perf_counter() - _cms_start)
         record_cms_result(result)
+        _audit_log_event(
+            request_id=request.headers.get("x-request-id", ""),
+            step=3,
+            service="waf_service",
+            client_subject=str(client_cert.subject) if client_cert else "",
+            result=result,
+            reason=reason or f"CMS Verification result: {result}",
+            latency_ms=int((time.perf_counter() - _cms_start) * 1000),
+        )
     original_method = request.headers.get("x-original-method", request.method).upper()
     _NO_BODY_METHODS = {"GET", "HEAD", "DELETE"}
     if original_method in _NO_BODY_METHODS:
@@ -110,7 +127,7 @@ async def verify_cms_signature(
     cms_b64 = request.headers.get("x-cms-payload")
     if not cms_b64:
         print(f"DEBUG: Missing X-CMS-Payload header for method {original_method}", flush=True)
-        _record("failed")
+        _record("failed", "Missing CMS Payload")
         raise HTTPException(
             status_code=401,
             detail=_problem(
@@ -123,7 +140,7 @@ async def verify_cms_signature(
     try:
         cms_der = base64.b64decode(cms_b64)
     except Exception as exc:
-        _record("failed")
+        _record("failed", f"Invalid CMS Encoding: {exc}")
         raise HTTPException(
             status_code=401,
             detail=_problem(401, "Invalid CMS Encoding", f"[Layer 3] X-CMS-Payload bukan base64 valid: {exc}"),
@@ -134,7 +151,7 @@ async def verify_cms_signature(
         signed_attrs_der = bytes(pkg["signer_info"]["signed_attributes"].native)
         signature        = bytes(pkg["signer_info"]["signature"].native)
     except Exception as exc:
-        _record("failed")
+        _record("failed", f"CMS Parse Error: {exc}")
         raise HTTPException(
             status_code=401,
             detail=_problem(401, "CMS Parse Error", f"[Layer 3] Gagal parse CMS package: {exc}"),
@@ -143,7 +160,7 @@ async def verify_cms_signature(
     if signer_cert_der != trusted_der:
         print("DEBUG: CMS signer cert does not match mTLS client cert", flush=True)
         record_cert_mismatch()
-        _record("cert_mismatch")
+        _record("cert_mismatch", "Sertifikat dalam CMS SignerInfo tidak cocok dengan mTLS client cert")
         raise HTTPException(
             status_code=403,
             detail=_problem(
@@ -162,7 +179,7 @@ async def verify_cms_signature(
             )
     except InvalidSignature:
         print("DEBUG: CMS signature verification FAILED (InvalidSignature)", flush=True)
-        _record("failed")
+        _record("failed", "CMS Signature Verification Failed (InvalidSignature)")
         raise HTTPException(
             status_code=403,
             detail=_problem(
@@ -175,7 +192,7 @@ async def verify_cms_signature(
     except Exception as exc:
         import traceback
         print(f"DEBUG: CMS verify error: {exc}\n{traceback.format_exc()}", flush=True)
-        _record("failed")
+        _record("failed", f"CMS Verification Error: {exc}")
         raise HTTPException(
             status_code=403,
             detail=_problem(403, "CMS Verification Error", f"[Layer 3] Error saat verifikasi CMS: {exc}"),
@@ -189,7 +206,7 @@ async def verify_cms_signature(
     if not hdr_ok:
         print(f"DEBUG: Header digest verification FAILED — {hdr_reason}", flush=True)
         record_header_result("modified")
-        _record("header_modified")
+        _record("header_modified", f"Header Digest Mismatch: {hdr_reason}")
         raise HTTPException(
             status_code=403,
             detail=_problem(
@@ -199,5 +216,4 @@ async def verify_cms_signature(
             ),
         )
     record_header_result("passed")
-    _record("success")
     print(f"DEBUG: Header digest verification OK — {hdr_reason}", flush=True)
