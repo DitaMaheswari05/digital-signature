@@ -225,6 +225,80 @@ services:
       - audit_api
     restart: unless-stopped
 
+  # ── Proxy-specific monitoring (Port 3001 Grafana, Port 8082 Audit) ──────────
+  proxy-grafana:
+    image: grafana/grafana:10.4.3
+    container_name: proxy-grafana
+    ports:
+      - "3001:3000"
+    environment:
+      - GF_SECURITY_ADMIN_USER=${GRAFANA_ADMIN_USER:-admin}
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD}
+      - GF_USERS_ALLOW_SIGN_UP=false
+      - GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH=/etc/grafana/dashboards/proxy_dashboard.json
+      - GF_SECURITY_ALLOW_EMBEDDING=true
+      - GF_AUTH_ANONYMOUS_ENABLED=true
+      - GF_AUTH_ANONYMOUS_ORG_ROLE=Viewer
+      - GF_SERVER_ROOT_URL=http://localhost:3001
+    volumes:
+      - ./monitoring/proxy/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./monitoring/grafana/dashboards/proxy_dashboard.json:/etc/grafana/dashboards/proxy_dashboard.json:ro
+      - grafana-proxy-data:/var/lib/grafana
+    networks:
+      - monitoring-net
+    depends_on:
+      - prometheus
+      - loki
+    restart: unless-stopped
+
+  proxy-audit-dashboard:
+    build: ./audit_dashboard_proxy
+    container_name: proxy-audit-dashboard
+    ports:
+      - "8082:80"
+    networks:
+      - monitoring-net
+    depends_on:
+      - audit_api
+    restart: unless-stopped
+
+  # ── WAF-specific monitoring (Port 3002 Grafana, Port 8083 Audit) ─────────────
+  waf-grafana:
+    image: grafana/grafana:10.4.3
+    container_name: waf-grafana
+    ports:
+      - "3002:3000"
+    environment:
+      - GF_SECURITY_ADMIN_USER=${GRAFANA_ADMIN_USER:-admin}
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD}
+      - GF_USERS_ALLOW_SIGN_UP=false
+      - GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH=/etc/grafana/dashboards/waf_dashboard.json
+      - GF_SECURITY_ALLOW_EMBEDDING=true
+      - GF_AUTH_ANONYMOUS_ENABLED=true
+      - GF_AUTH_ANONYMOUS_ORG_ROLE=Viewer
+      - GF_SERVER_ROOT_URL=http://localhost:3002
+    volumes:
+      - ./monitoring/waf/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./monitoring/grafana/dashboards/waf_dashboard.json:/etc/grafana/dashboards/waf_dashboard.json:ro
+      - grafana-waf-data:/var/lib/grafana
+    networks:
+      - monitoring-net
+    depends_on:
+      - prometheus
+      - loki
+    restart: unless-stopped
+
+  waf-audit-dashboard:
+    build: ./audit_dashboard_waf
+    container_name: waf-audit-dashboard
+    ports:
+      - "8083:80"
+    networks:
+      - monitoring-net
+    depends_on:
+      - audit_api
+    restart: unless-stopped
+
 networks:
   mtls-net:
     driver: bridge
@@ -234,5 +308,7 @@ networks:
 volumes:
   prometheus-data:
   grafana-data:
+  grafana-proxy-data:
+  grafana-waf-data:
   loki-data:
   postgres-data:
