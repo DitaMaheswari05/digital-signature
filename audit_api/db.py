@@ -10,7 +10,10 @@ DB_HOST = os.environ.get("POSTGRES_HOST", "postgres")
 DB_PORT = int(os.environ.get("POSTGRES_PORT", "5432"))
 DB_NAME = os.environ.get("POSTGRES_DB", "audit_db")
 DB_USER = os.environ.get("POSTGRES_USER", "audituser")
-DB_PASS = os.environ.get("POSTGRES_PASSWORD", "auditpass")
+DB_PASS = os.environ.get("POSTGRES_PASSWORD")
+
+if not DB_PASS:
+    raise ValueError("POSTGRES_PASSWORD environment variable must be set")
 
 _CONN: psycopg2.extensions.connection | None = None
 

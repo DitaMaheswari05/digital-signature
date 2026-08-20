@@ -84,8 +84,8 @@ services:
     ports:
       - "3000:3000"
     environment:
-      - GF_SECURITY_ADMIN_USER=admin
-      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_SECURITY_ADMIN_USER=${GRAFANA_ADMIN_USER:-admin}
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD}
       - GF_USERS_ALLOW_SIGN_UP=false
       - GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH=/etc/grafana/dashboards/mtls_proxy_dashboard.json
       - GF_SECURITY_ALLOW_EMBEDDING=true
@@ -180,9 +180,9 @@ services:
     image: postgres:16-alpine
     container_name: postgres
     environment:
-      - POSTGRES_DB=audit_db
-      - POSTGRES_USER=audituser
-      - POSTGRES_PASSWORD=auditpass
+      - POSTGRES_DB=${POSTGRES_DB:-audit_db}
+      - POSTGRES_USER=${POSTGRES_USER:-audituser}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
     volumes:
       - postgres-data:/var/lib/postgresql/data
     networks:
@@ -202,9 +202,9 @@ services:
     environment:
       - POSTGRES_HOST=postgres
       - POSTGRES_PORT=5432
-      - POSTGRES_DB=audit_db
-      - POSTGRES_USER=audituser
-      - POSTGRES_PASSWORD=auditpass
+      - POSTGRES_DB=${POSTGRES_DB:-audit_db}
+      - POSTGRES_USER=${POSTGRES_USER:-audituser}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
       - AUDIT_RETENTION_MONTHS=${AUDIT_RETENTION_MONTHS:-60}
     networks:
       - mtls-net
